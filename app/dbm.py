@@ -19,7 +19,8 @@ class Dbm:
             user=user,
             password=password,
             host=host,
-            port=port
+            port=port,
+            connect_timeout=10
         )
 
         cursor = conn.cursor()
