@@ -1,6 +1,7 @@
 from os import getenv
 import logging
-from flask import Flask,request,render_template, redirect, make_response, send_from_directory
+import traceback
+from flask import Flask, request, render_template, redirect, make_response, send_from_directory
 from dbm import Dbm
 from utils import *
 from requests import get
@@ -10,21 +11,12 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
-api_token = getenv("IP_INFO_TOKEN",default="Undefined")
+api_token = getenv("IP_INFO_TOKEN", default="Undefined")
 
-# Tracks whether the database schema has been successfully initialised.
-# Using a mutable container so the flag is shared across the module scope.
 _db_state = {"initialized": False}
 
 @app.before_request
 def ensure_db_initialized():
-    """Lazily initialise the database schema on the first request.
-
-    If the database is not yet reachable the request is allowed to proceed
-    anyway — individual route handlers already create their own Dbm() instances
-    and will surface a meaningful error to the caller rather than crashing the
-    whole process.
-    """
     if _db_state["initialized"]:
         return
     try:
@@ -33,31 +25,30 @@ def ensure_db_initialized():
         _db_state["initialized"] = True
         logger.info("Database initialised successfully.")
     except Exception as e:
-        logger.warning("Database not ready yet, will retry on next request: %s", e)
+        logger.error("DB INIT FAILED: %s", traceback.format_exc())
+        return "DB init failed: " + str(e), 500
 
-@app.route("/") #homepage
+@app.route("/")
 def home():
-    r = render_template("index.html",url=request.url,title="Clickstat - A URL shortener with IP and GPS loging",description="Clickstat is a URL shortener with IP and location tracking capabilities. Shorten your links with Clickstat, and you will be able to view information about those who click on it. This information includes IP address, GPS location, User-Agent, and more. Unlike other services, Clickstat uses GPS to log the location for pinpoint accuracy. Experience the most feature-packed URL shortener with Clickstat.")
+    r = render_template("index.html", url=request.url, title="Clickstat - A URL shortener with IP and GPS loging", description="Clickstat is a URL shortener with IP and location tracking capabilities. Shorten your links with Clickstat, and you will be able to view information about those who click on it. This information includes IP address, GPS location, User-Agent, and more. Unlike other services, Clickstat uses GPS to log the location for pinpoint accuracy. Experience the most feature-packed URL shortener with Clickstat.")
     return r
 
 @app.route("/robots.txt")
 def robots():
-    return send_from_directory(app.static_folder,"robots.txt")
+    return send_from_directory(app.static_folder, "robots.txt")
 
 @app.route("/sitemap.xml")
 def sitemap():
-    return send_from_directory(app.static_folder,"sitemap.xml")
+    return send_from_directory(app.static_folder, "sitemap.xml")
 
-@app.route("/createlink",methods=["POST"]) # this end point is used by the form in the home page to generate shor urls
+@app.route("/createlink", methods=["POST"])
 def createlink():
     url = request.form["url"]
-    host = request.host.replace("www.","")
-    if url=="":
-        return render_template("invalid_url.html",title="Invalid URL")
-    #check url for malicious use
+    host = request.host.replace("www.", "")
+    if url == "":
+        return render_template("invalid_url.html", title="Invalid URL")
     if getenv("VERIFY_URL") and is_malicious(url):
-        return render_template("error.html",title="Malicious URL Detected",error="The URL you are trying to shorten has been flagged as unsafe or malicious. For security, we cannot process this request.")
-    
+        return render_template("error.html", title="Malicious URL Detected", error="The URL you are trying to shorten has been flagged as unsafe or malicious. For security, we cannot process this request.")
     ip = get_client_ip(request)
     if "enable" in request.form:
         TL = 1
@@ -66,59 +57,58 @@ def createlink():
     while True:
         try:
             identifier = generate_identifier()
-            data = {"url":url,"identifier":identifier, "TL":TL, "owner_ip":ip}
+            data = {"url": url, "identifier": identifier, "TL": TL, "owner_ip": ip}
             database = Dbm()
             database.generate_link(data)
             break
         except:
             continue
-    return render_template("show_link.html",link=host+f"/{identifier}",identifier=identifier)
+    return render_template("show_link.html", link=host + f"/{identifier}", identifier=identifier)
 
-@app.route("/getlink",methods=["POST"]) #this route is used by the js that sends the gps data
+@app.route("/getlink", methods=["POST"])
 def data():
     data = request.json
-
     if not data:
-        return make_response("Bad request",400)
+        return make_response("Bad request", 400)
     db = Dbm()
     result = db.fetch_link(data["identifier"])
     if result:
         link = result[0][0]
-        linkData = {"link" : link}
-        #collect data
-        ip = get_client_ip(request) 
+        linkData = {"link": link}
+        ip = get_client_ip(request)
         user_agent = request.headers.get('User-Agent')
-        data["user_agent"]=user_agent
-        data["ip"]=ip
+        data["user_agent"] = user_agent
+        data["ip"] = ip
         db = Dbm()
         db.insert_into_data(data)
         return linkData
     else:
         return "url doesn't exist"
 
-@app.route("/<identifier>",methods=["GET"])
+@app.route("/<identifier>", methods=["GET"])
 def fetchURL(identifier):
     db = Dbm()
     result = db.fetch_link(identifier)
     if result:
         if result[0][1] == 0:
-            ip = get_client_ip(request) 
+            ip = get_client_ip(request)
             user_agent = request.headers.get('User-Agent')
             data = {
                 "identifier": identifier,
                 "ip": ip,
                 "user_agent": user_agent,
                 "latitude": None,
-                "longitude": None 
+                "longitude": None
             }
             db = Dbm()
             db.insert_into_data(data)
-            return redirect(result[0][0],code=301) 
+            return redirect(result[0][0], code=301)
         elif result[0][1] == 1:
-            return render_template("locate.html",identifier=identifier)
+            return render_template("locate.html", identifier=identifier)
     else:
-        return render_template("error.html",utl=request.url,error="404 Not Found", title="404 Not Found",description="404 Not Found")
-@app.route("/stats",methods=["GET","POST"])
+        return render_template("error.html", utl=request.url, error="404 Not Found", title="404 Not Found", description="404 Not Found")
+
+@app.route("/stats", methods=["GET", "POST"])
 def stats():
     if request.method == "POST":
         identifier = request.form["identifier"].strip()[-6:]
@@ -126,16 +116,15 @@ def stats():
         result = db.get_stats(identifier)
         if result:
             click_stats = parse_and_format(result)
-            return render_template("show_stats.html", identifier=identifier, data=click_stats) 
+            return render_template("show_stats.html", identifier=identifier, data=click_stats)
         else:
-            return render_template("error.html",error="Nobody has clicked that link just yet!", title="Unavailable") 
+            return render_template("error.html", error="Nobody has clicked that link just yet!", title="Unavailable")
     else:
-        return render_template("stats.html",url=request.url,title="Stats - View data about your shortened links.",description="You can view information about your shortened links on this page.")
-
+        return render_template("stats.html", url=request.url, title="Stats - View data about your shortened links.", description="You can view information about your shortened links on this page.")
 
 @app.route("/about")
 def about():
-    return render_template("about.html",url=request.url,title="About Clickstat",description="Clickstat is a URL shortener with IP and location tracking capabilities. Shorten your links with Clickstat, and you will be able to view information about those who click on it. This information includes IP address, GPS location, User-Agent, and more. Unlike other services, Clickstat uses GPS to log the location for pinpoint accuracy. Experience the most feature-packed URL shortener with Clickstat.")
+    return render_template("about.html", url=request.url, title="About Clickstat", description="Clickstat is a URL shortener with IP and location tracking capabilities. Shorten your links with Clickstat, and you will be able to view information about those who click on it. This information includes IP address, GPS location, User-Agent, and more. Unlike other services, Clickstat uses GPS to log the location for pinpoint accuracy. Experience the most feature-packed URL shortener with Clickstat.")
 
 @app.route("/lookup=<ip>")
 def ip_info(ip):
@@ -144,9 +133,9 @@ def ip_info(ip):
     if res.status_code == 200:
         data_string = res.text
         data = loads(data_string)
-        return render_template("ip_info.html",title="IP Info",message=f"About: {ip}",data=data)
+        return render_template("ip_info.html", title="IP Info", message=f"About: {ip}", data=data)
     else:
-        return render_template("error.html",error="Unknown Error")
+        return render_template("error.html", error="Unknown Error")
 
 @app.route("/whatsmyip")
 def whatsmyip():
@@ -155,9 +144,9 @@ def whatsmyip():
     if res.status_code == 200:
         data_string = res.text
         data = loads(data_string)
-        return render_template("ip_info.html",title="What Is My IP Address - find information about your IP Address",description="Check your public IP address and learn about your location details, including city, region, country, and timezone. Our simple tool provides quick and easy access to this information, helping you understand more about your internet connection.",message=f"Your IP Address is: {ip}",data=data)
+        return render_template("ip_info.html", title="What Is My IP Address - find information about your IP Address", description="Check your public IP address and learn about your location details, including city, region, country, and timezone. Our simple tool provides quick and easy access to this information, helping you understand more about your internet connection.", message=f"Your IP Address is: {ip}", data=data)
     else:
-        return render_template("error.html",error="Unknown Error")
+        return render_template("error.html", error="Unknown Error")
 
 if __name__ == "__main__":
-    app.run(debug=True,port=getenv("PORT",default=5000))
+    app.run(debug=True, port=getenv("PORT", default=5000))
