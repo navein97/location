@@ -1,15 +1,39 @@
 from os import getenv
+import logging
 from flask import Flask,request,render_template, redirect, make_response, send_from_directory
-from dbm import Dbm 
+from dbm import Dbm
 from utils import *
 from requests import get
 from json import loads
 
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
 app = Flask(__name__)
 api_token = getenv("IP_INFO_TOKEN",default="Undefined")
 
-database = Dbm()
-database.init()
+# Tracks whether the database schema has been successfully initialised.
+# Using a mutable container so the flag is shared across the module scope.
+_db_state = {"initialized": False}
+
+@app.before_request
+def ensure_db_initialized():
+    """Lazily initialise the database schema on the first request.
+
+    If the database is not yet reachable the request is allowed to proceed
+    anyway — individual route handlers already create their own Dbm() instances
+    and will surface a meaningful error to the caller rather than crashing the
+    whole process.
+    """
+    if _db_state["initialized"]:
+        return
+    try:
+        db = Dbm()
+        db.init()
+        _db_state["initialized"] = True
+        logger.info("Database initialised successfully.")
+    except Exception as e:
+        logger.warning("Database not ready yet, will retry on next request: %s", e)
 
 @app.route("/") #homepage
 def home():
