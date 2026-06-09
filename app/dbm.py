@@ -1,8 +1,11 @@
 import psycopg2
 from os import getenv
+import os
+
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
 def command(filename):
-    with open("sql/"+filename,"r") as f:
+    with open(os.path.join(BASE_DIR, "sql", filename), "r") as f:
         query = f.read()
         return query
 
