@@ -2,7 +2,7 @@ FROM python:3.12.7
 
 COPY . /clickstat
 
-WORKDIR /clickstat
+WORKDIR /clickstat/app
 
 RUN pip install -r requirements.txt
 
